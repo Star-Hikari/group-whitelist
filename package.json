@@ -1,0 +1,22 @@
+{
+  "name": "@starhikari/koishi-plugin-group-whitelist",
+  "description": "实现koishi全局白名单，群聊或私聊不在白名单内时bot将不再处理后续指令",
+  "version": "0.0.1",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "dist"
+  ],
+  "license": "MIT",
+  "scripts": {},
+  "keywords": [
+    "chatbot",
+    "koishi",
+    "plugin"
+  ],
+  "devDependencies": {},
+  "peerDependencies": {
+    "koishi": "^4.18.7"
+  }
+}
