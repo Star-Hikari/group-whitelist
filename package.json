@@ -1,7 +1,7 @@
 {
   "name": "@starhikari/koishi-plugin-group-whitelist",
-  "description": "实现koishi全局白名单，群聊或私聊不在白名单内时bot将不再处理后续指令",
-  "version": "0.0.1",
+  "description": "实现koishi全局白名单，群聊不在白名单内时bot将不再处理该群的任何消息与指令",
+  "version": "1.0.0",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
@@ -9,14 +9,33 @@
     "dist"
   ],
   "license": "MIT",
-  "scripts": {},
+  "homepage": "https://github.com/Star-Hikari/group-whitelist",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Star-Hikari/group-whitelist.git"
+  },
   "keywords": [
     "chatbot",
     "koishi",
-    "plugin"
+    "plugin",
+    "whitelist",
+    "group-whitelist",
+    "群聊白名单",
+    "群白名单"
   ],
-  "devDependencies": {},
   "peerDependencies": {
     "koishi": "^4.18.7"
+  },
+  "koishi": {
+    "description": {
+      "zh": "群聊白名单系统：按「平台 + 群号」维护白名单，未命中的群消息会被整只机器人静默忽略。名单可用指令批量增删，也可在没有数据库时改用配置项维护。",
+      "en": "Group chat whitelist: keep a per-platform group whitelist; messages from groups not on it are silently ignored by the whole bot. Manage it with commands, or fall back to a config list when no database is available."
+    },
+    "service": {
+      "required": [],
+      "optional": [
+        "database"
+      ]
+    }
   }
 }
