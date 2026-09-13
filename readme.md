@@ -154,6 +154,49 @@ OneBot 的群消息事件里**没有群名**（事件只带 `group_id`），群�
 取不到名称时**保留原有值**，不会把已有数据清空；名称相同也不会产生多余的写库操作。
 未注册数据库（配置模式）时没有可持久化的位置，群名改为列表展示时按需查询并缓存在内存中。
 
+## 给其他插件用的服务
+
+本插件按 Koishi 官方[自定义服务](https://koishi.chat/zh-CN/guide/plugin/service)的写法，
+在 `package.json` 里用 `koishi.service.implements` 声明并提供一个名为 `groupWhitelist` 的服务，
+控制台的插件详情中可以看到「提供以下服务」。
+
+总闸能**自动**拦下的只有消息事件：`Processor.attach` 只挂在消息事件上，所以 `session.response`
+这套机制对 notice / onebot 事件无效。像 bot-poke 这样在 `notice` 监听器里直接发言的插件，
+必须自己查一下白名单：
+
+```ts
+// 1) 声明可选依赖
+export const inject = { optional: ['groupWhitelist'] }
+
+// 2) tsconfig 里让类型可见（模块增强只有被引入才会生效）
+//    "types": ["node", "@starhikari/koishi-plugin-group-whitelist"]
+
+// 3) 用否定式可选链，未装白名单插件时自动退化为「不受限制」
+ctx.on('notice', async (session) => {
+  if (session.subtype !== 'poke') return
+  if (!ctx.groupWhitelist?.isAllowed(session)) return
+  await session.send('哎呀，别戳我啦~')
+})
+```
+
+> 必须写成 `!ctx.groupWhitelist?.isAllowed(session)`。若写成
+> `if (ctx.groupWhitelist && !ctx.groupWhitelist.isAllowed(session)) return`，
+> 当白名单插件因故未加载时会退化成「戳戳永远不回应」，与预期相反。
+
+服务接口（本插件通过 `implements` 声明并提供 `GroupWhitelist` 服务）：
+
+| 成员 | 说明 |
+|------|------|
+| `isAllowed(session)` | 当前会话所在群是否在白名单内；私聊按 `privateChat` 策略判定 |
+| `isAllowedGroup(platform, groupId)` | 直接按平台 + 群号判定 |
+| `refresh(platform?)` | 强制重新载入判定表 |
+
+> 服务在**构造函数里显式 `ctx.set`**，因此 `ready` 之前就已注册，其他插件的 `inject` 不会排队等待。
+> 但**判定表要等启动闸门结束才载入**，这段窗口内 `isAllowed()` 一律返回 `false`（fail-closed）。
+
+**总闸覆盖的事件类型**：`message`、`notice`、`onebot`。入群、好友请求等管理类事件不在其中，
+否则入群提示、加好友审核会被误伤。
+
 ## 权限模型
 
 管理指令的裁决**完全由插件自己完成**（`ensureAdmin`），Koishi 内置的 `authority` 权限被刻意设为 0

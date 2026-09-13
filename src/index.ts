@@ -1,4 +1,4 @@
-import { Context, Session, Schema } from 'koishi'
+import { Context, Session, Schema, Service } from 'koishi'
 
 export const name = 'group-whitelist'
 
@@ -146,6 +146,79 @@ declare module 'koishi' {
   interface Events {
     /** 手动刷新白名单缓存（可选传入平台名，只刷新该平台） */
     'group-whitelist/refresh'(platform?: string): void
+    /**
+     * onebot 适配器把戳一戳、撤回、表情回应等通知类事件派发为 notice / onebot 事件。
+     * 适配器自身没有声明这些事件类型，这里补上声明，好让本插件能监听它们做拦截与日志。
+     */
+    'notice'(session: Session): void
+    'onebot'(session: Session): void
+  }
+
+  interface Context {
+    /** 由本插件提供的群白名单服务，其他插件可用它判断某个会话是否被允许 */
+    groupWhitelist: GroupWhitelist
+  }
+}
+
+/**
+ * 群白名单服务。
+ *
+ * 按 Koishi 官方「自定义服务」的写法实现：继承 Service 并 `super(ctx, name, immediate)`。
+ * 但**必须补一行 `ctx.set`**，原因是 cordis 的 Service 构造函数里：
+ *
+ * ```js
+ * if (immediate) {
+ *   if (_ctx) self[symbols.expose] = name      // 只是标记，交给插件解析器去注册
+ *   else self.ctx.set(name, self)
+ * }
+ * ctx.on('ready', async () => {
+ *   await self.start()
+ *   if (!immediate) self.ctx.set(name, self)   // 注意条件：immediate 为真时这里不注册
+ * })
+ * ```
+ *
+ * 也就是说「传入 ctx 且 immediate = true」这条路径**不会**真正把服务写进 store
+ * （`expose` 只在 `new Plugin()` 形式加载插件时被解析，本插件用的是 `apply` 形式），
+ * 结果 `ctx.groupWhitelist` 一直是 undefined，只有 `provide` 声明生效。
+ * 因此这里显式调用一次 `ctx.set`，保证服务在 `ready` 之前就可用。
+ *
+ * 服务类型必须 **导出**：它被 `declare module 'koishi'` 里的 `Context` 增强引用，
+ * 若声明为模块内私有类型，tsc 会认为无法命名而在生成的 .d.ts 中**静默丢弃整个增强块**，
+ * 导致其他插件（如 bot-poke）编译时报 `Property 'groupWhitelist' does not exist on type 'Context'`。
+ *
+ * 用法（其他插件）：
+ *
+ * ```ts
+ * export const inject = { optional: ['groupWhitelist'] }
+ * // …
+ * if (!ctx.groupWhitelist?.isAllowed(session)) return
+ * ```
+ */
+export class GroupWhitelist extends Service {
+  constructor(
+    ctx: Context,
+    private readonly isAllowedSession: (session: Session) => boolean,
+    private readonly isAllowedGroupFn: (platform: string, groupId: string) => boolean,
+    private readonly refreshFn: (platform?: string) => Promise<void>,
+  ) {
+    super(ctx, 'groupWhitelist', true)
+    // 见上方说明：immediate 路径不会自动注册，必须显式 set
+    ctx.set('groupWhitelist', this)
+  }
+
+  /** 当前会话所在群是否在白名单内；私聊按 privateChat 策略判定 */
+  isAllowed(session: Session): boolean {
+    return this.isAllowedSession(session)
+  }
+
+  /** 直接按平台 + 群号判定 */
+  isAllowedGroup(platform: string, groupId: string): boolean {
+    return this.isAllowedGroupFn(platform, groupId)
+  }
+
+  /** 强制重新载入判定表 */
+  refresh(platform?: string): Promise<void> {
+    return this.refreshFn(platform)
   }
 }
 
@@ -550,6 +623,14 @@ export function apply(ctx: Context, config: Config) {
   let dbEverSeen = false
   /** 启动兜底是否已判定「确实没有数据库」 */
   let configSettled = false
+  /**
+   * 白名单判定表是否已初始化完成（启动闸门的开关）。
+   *
+   * 必须声明在使用它的函数**之前**：`ctx.inject` 的回调是同步执行的，
+   * 若把 `let initDone` 放在文件靠后，`resetDecisions()` 会踩到暂时性死区
+   * （ReferenceError: Cannot access 'initDone' before initialization）。
+   */
+  let initDone = false
 
   function markAllowed(platform: string, groupId: string) {
     allowedGroups.add(cacheKey(platform, groupId))
@@ -677,17 +758,25 @@ export function apply(ctx: Context, config: Config) {
    * 4. 再把 Session 原型上的 execute 包一层作为兜底，避免别的插件绕过总闸直接调用
    *    session.execute() 执行指令。
    */
-  ctx.on('ready', async () => {
-    for (const platform of new Set(ctx.bots.map(bot => bot.platform))) {
-      await ensurePlatformLoaded(platform)
-    }
-  })
+  /**
+   * 总闸覆盖的事件类型。
+   *
+   * 关键点：**不能只拦消息事件**。OneBot 的戳一戳、撤回、表情回应等都以 notice/onebot
+   * 事件的形式抵达，它们同样可能触发插件发言（例如 bot-poke 收到戳戳就回一句），
+   * 如果只拦 message，这些插件就会在白名单之外的群里继续响应。
+   *
+   * 只列出「用户可感知、插件会据此发言」的事件；入群、好友请求等管理类事件不在此列，
+   * 否则入群提示、加好友审核这类功能会被误伤。
+   *
+   * 注意 `message-created`：Satori 的 `Bot.dispatch` 会按 eventAliases 把 message 规范化成
+   * `message-created`，因此事件对象上的 type 只有这个规范名，必须一起列出。
+   */
+  const GATED_EVENTS = new Set(['message', 'message-created', 'notice', 'onebot'])
 
   ctx.before('attach', (session) => {
-    // 事件类型不能用 'message' 字面量判断：Satori 会把 event.type 规范化为 'message-created'。
-    // 这里改为「带用户的消息事件」判断，覆盖群聊与私聊，又不把入群等通知事件卷进来。
     if (!session.userId || !session.event) return
     if (!session.guildId) return
+    if (!GATED_EVENTS.has(session.event.type)) return
     ensurePlatformLoaded(session.platform).catch((error) => {
       logger.warn('载入白名单失败：%s', error instanceof Error ? error.message : error)
     })
@@ -695,11 +784,28 @@ export function apply(ctx: Context, config: Config) {
 
   ctx.on('message', (session) => {
     if (!session.userId || !session.event) return
+    if (!GATED_EVENTS.has(session.event.type)) return
     const blocked = resolveBlockSync(session)
     if (blocked === null) return
     blockedMap.set(session, blocked)
     session.response = async () => blockedMap.get(session) ?? ''
   }, { prepend: true })
+
+  // notice / onebot 事件不经过消息流水线，插件是在自己的事件监听器里直接发言的，
+  // 没有统一的「拦截点」可以借用。因此这里在事件链最前面做一次判定：
+  // 未命中白名单时只记日志（保持静默语义），真正的「让插件闭嘴」由
+  // whitelist 服务提供的 isAllowed() 由各插件自行查询完成，见下方 provide。
+  ctx.on('notice', (session) => logBlockedEvent(session), { prepend: true })
+  ctx.on('onebot', (session) => logBlockedEvent(session), { prepend: true })
+
+  function logBlockedEvent(session: Session) {
+    if (!session.userId || !session.event) return
+    if (!session.guildId) return
+    if (resolveBlockSync(session) === null) return
+    if (config.enableLog) {
+      logger.debug('已拦截非白名单群的非消息事件：%s / %s / %s', session.platform, session.guildId, session.event.type)
+    }
+  }
 
   // 兜底：不允许任何绕过总闸的指令执行
   const sample = ctx.bots[0]?.session({ type: 'message' })
@@ -985,6 +1091,39 @@ export function apply(ctx: Context, config: Config) {
     })
   })
 
+  // ---------- 对外服务 ----------
+  //
+  // 消息事件的拦截由总闸自动完成，但其他插件在自己的 notice / onebot 监听器里直接发言
+  // （例如 bot-poke 收到戳一戳就回话）时没有统一的拦截点，必须由插件主动查询。
+  // 因此把白名单判定暴露成服务（见文件顶部的 GroupWhitelist 类）：
+  //
+  //   export const inject = { optional: ['groupWhitelist'] }
+  //   ctx.on('notice', (session) => {
+  //     if (!ctx.groupWhitelist?.isAllowed(session)) return   // ← 白名单外的群直接不响应
+  //     ...
+  //   })
+  //
+  // 未加载本插件时 ctx.groupWhitelist 不存在，插件按 `!ctx.groupWhitelist?.isAllowed(session)`
+  // 的写法可自然退化为「不受限制」。
+  //
+  // 这里的构造函数第三个参数 immediate = true，表示服务**立即注册**，
+  // 这样其他插件的 `inject` 不会一直等待到 ready。
+  new GroupWhitelist(
+    ctx,
+    (session) => {
+      if (!session.guildId) {
+        if (config.privateChat === 'all') return true
+        if (config.privateChat === 'whitelist') {
+          return !!session.userId && config.privateWhitelist.includes(session.userId)
+        }
+        return false
+      }
+      return isGroupAllowedSync(session.platform, session.guildId)
+    },
+    isGroupAllowedSync,
+    platform => refresh(platform),
+  )
+
   // ---------- 对外接口 ----------
   /**
    * 强制重新载入白名单判定表。
@@ -1026,8 +1165,6 @@ export function apply(ctx: Context, config: Config) {
   //
   // 因此启动后先等 startupDelay 秒（默认 3 秒）让数据库等服务就位，这段时间内
   // **拦截一切群聊请求**（fail-closed），随后才真正初始化判定表。
-  let initDone = false
-
   async function initialize() {
     if (initDone) return
     configSettled = !db
