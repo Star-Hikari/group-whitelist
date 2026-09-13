@@ -64,7 +64,7 @@ export const Config: Schema<Config> = Schema.intersect([
     // 仅在启用内置权限检查时展示阈值
     Schema.union([
       Schema.object({
-        authorityCheck: Schema.const(true).required(),
+        authorityCheck: Schema.const(true),
         authorityLevel: Schema.number().min(0).max(5).default(3).description('使用管理指令所需的最低 authority 等级。Koishi 默认用户等级为 1，所以默认只有手动提权过的人能用'),
       }),
       Schema.object({}),
@@ -73,7 +73,7 @@ export const Config: Schema<Config> = Schema.intersect([
     // 仅在启用管理员数组时展示名单
     Schema.union([
       Schema.object({
-        adminCheck: Schema.const(true).required(),
+        adminCheck: Schema.const(true),
         adminList: Schema.array(Schema.string()).default([]).description('管理员用户 ID 列表，可跨平台，与 authority 满足其一即可使用管理指令'),
       }),
       Schema.object({}),
