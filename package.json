@@ -1,7 +1,7 @@
 {
   "name": "@starhikari/koishi-plugin-group-whitelist",
   "description": "实现koishi全局白名单，群聊不在白名单内时bot将不再处理该群的任何消息与指令",
-  "version": "1.1.2",
+  "version": "1.2.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "types": "lib/index.d.ts",
@@ -29,8 +29,8 @@
   },
   "koishi": {
     "description": {
-      "zh": "群聊白名单系统：按「平台 + 群号」维护白名单，未命中的群消息会被整只机器人静默忽略。名单可用指令批量增删，也可在没有数据库时改用配置项维护。",
-      "en": "Group chat whitelist: keep a per-platform group whitelist; messages from groups not on it are silently ignored by the whole bot. Manage it with commands, or fall back to a config list when no database is available."
+      "zh": "群聊白名单系统：按「平台 + 群号」维护白名单，未命中的群消息会被整只机器人静默忽略。名单可用指令批量增删，也支持用户私聊申请、管理员审批后入白名单。",
+      "en": "Group chat whitelist: keep a per-platform group whitelist; messages from groups not on it are silently ignored by the whole bot. Manage it with commands, or let users apply in private chat and have admins approve."
     },
     "service": {
       "required": [],
