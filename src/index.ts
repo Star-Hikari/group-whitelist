@@ -616,7 +616,7 @@ export function apply(ctx: Context, config: Config) {
       }
     }
 
-    logger.info('群信息刷新完成：共 %d 个群，更新 %d 个，名称取不到 %d 个', rows.length, updated, failed)
+    logger.info('群信息刷新完成：共 %d 个群，更新 %d 个，名称获取失败 %d 个', rows.length, updated, failed)
     return { total: rows.length, updated, failed, skipped: false }
   }
 
@@ -969,7 +969,7 @@ export function apply(ctx: Context, config: Config) {
     if (!bot) return
     const groupLabel = `${entry.groupId}${entry.name ? `（${entry.name}）` : ''}`
     const text = approve
-      ? `你申请的群 ${groupLabel} 已通过审批，已加入白名单，现在可以在群里正常使用机器人了。`
+      ? `你申请的群 ${groupLabel} 已通过审批，已加入白名单，现在可以在群里正常使用啦~`
       : `你申请的群 ${groupLabel} 未通过审批。如有疑问请联系管理员。`
     try {
       const target = bot.session({
